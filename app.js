@@ -65,6 +65,28 @@ btnClear.addEventListener('click', () => {
     if (el) el.addEventListener('input', draw);
 });
 
+if (inputTileShape) {
+    inputTileShape.addEventListener('change', () => {
+        if (inputTileShape.value === 'hexa') {
+            inputTileH.disabled = true;
+            inputTileH.value = (parseFloat(inputTileW.value) * 2 / Math.sqrt(3)).toFixed(1);
+        } else if (inputTileShape.value === 'octo') {
+            inputTileH.disabled = true;
+            inputTileH.value = inputTileW.value;
+        } else {
+            inputTileH.disabled = false;
+        }
+        draw();
+    });
+}
+inputTileW.addEventListener('input', () => {
+    if (inputTileShape && inputTileShape.value === 'hexa') {
+        inputTileH.value = (parseFloat(inputTileW.value) * 2 / Math.sqrt(3)).toFixed(1);
+    } else if (inputTileShape && inputTileShape.value === 'octo') {
+        inputTileH.value = inputTileW.value;
+    }
+});
+
 function updatePreciseInputVisibility() {
     if (mode === 'DRAW' && points.length > 0 && !isClosed) {
         preciseInputGroup.style.display = 'block';
@@ -342,12 +364,18 @@ function draw() {
 
     const pxlScale = parseFloat(inputScale.value) || 3;
     const tW = parseFloat(inputTileW.value) || 60;
-    const tH = parseFloat(inputTileH.value) || 60;
+    let tH = parseFloat(inputTileH.value) || 60;
     const joint = (parseFloat(inputJoint.value) || 3) / 10; // mm to cm
     const oX = (parseFloat(inputOffsetX.value) || 0);
     const oY = (parseFloat(inputOffsetY.value) || 0);
     const angleRad = (parseFloat(inputAngle?.value) || 0) * Math.PI / 180;
     const shape = inputTileShape?.value || 'rect';
+
+    if (shape === 'hexa') {
+        tH = tW * 2 / Math.sqrt(3);
+    } else if (shape === 'octo') {
+        tH = tW;
+    }
 
     // Draw Room Polygon
     if (points.length > 0) {
