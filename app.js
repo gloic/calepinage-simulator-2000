@@ -14,6 +14,8 @@ const inputJoint = document.getElementById('joint');
 const inputOffsetX = document.getElementById('offsetX');
 const inputOffsetY = document.getElementById('offsetY');
 const inputScale = document.getElementById('scale');
+const inputTileShape = document.getElementById('tileShape');
+const inputAngle = document.getElementById('angle');
 
 const preciseInputGroup = document.getElementById('preciseInputGroup');
 const inputWallLength = document.getElementById('wallLength');
@@ -59,8 +61,8 @@ btnClear.addEventListener('click', () => {
     draw();
 });
 
-[inputTileW, inputTileH, inputJoint, inputOffsetX, inputOffsetY, inputScale].forEach(el => {
-    el.addEventListener('input', draw);
+[inputTileW, inputTileH, inputJoint, inputOffsetX, inputOffsetY, inputScale, inputTileShape, inputAngle].forEach(el => {
+    if (el) el.addEventListener('input', draw);
 });
 
 function updatePreciseInputVisibility() {
@@ -248,6 +250,15 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 // Math Helpers
+function rotatePoint(p, angleRad) {
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    return {
+        x: p.x * cos - p.y * sin,
+        y: p.x * sin + p.y * cos
+    };
+}
+
 function polygonArea(pts) {
     let area = 0;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -335,6 +346,8 @@ function draw() {
     const joint = (parseFloat(inputJoint.value) || 3) / 10; // mm to cm
     const oX = (parseFloat(inputOffsetX.value) || 0);
     const oY = (parseFloat(inputOffsetY.value) || 0);
+    const angleRad = (parseFloat(inputAngle?.value) || 0) * Math.PI / 180;
+    const shape = inputTileShape?.value || 'rect';
 
     // Draw Room Polygon
     if (points.length > 0) {
@@ -428,9 +441,17 @@ function draw() {
 
     // Tiling Logic
     if (isClosed && points.length > 2) {
-        // Calculate Bounding Box of Room
+        const anchor = points[0];
+
+        // 1. Transform points into local coordinates oriented with tiles
+        const localPoints = points.map(p => {
+            let rel = { x: p.x - anchor.x, y: p.y - anchor.y };
+            return rotatePoint(rel, -angleRad);
+        });
+
+        // 2. Calculate Bounding Box of Room in local coords
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        points.forEach(p => {
+        localPoints.forEach(p => {
             if (p.x < minX) minX = p.x;
             if (p.x > maxX) maxX = p.x;
             if (p.y < minY) minY = p.y;
@@ -449,47 +470,124 @@ function draw() {
         const tileW_px = tW * pxlScale;
         const tileH_px = tH * pxlScale;
         const joint_px = joint * pxlScale;
-        const offsetX_px = (oX * pxlScale) % (tileW_px + joint_px);
-        const offsetY_px = (oY * pxlScale) % (tileH_px + joint_px);
 
-        // Find grid starting point before bounding box
-        const startX = minX - ((minX - offsetX_px) % (tileW_px + joint_px)) - (tileW_px + joint_px);
-        const startY = minY - ((minY - offsetY_px) % (tileH_px + joint_px)) - (tileH_px + joint_px);
+        // Modulo for seamless dragging grid
+        let stepX = tileW_px + joint_px;
+        let stepY = tileH_px + joint_px;
+        if (shape === 'hexa') {
+            stepY = tileH_px * 0.75 + joint_px;
+        }
+
+        const offsetX_px = (oX * pxlScale) % stepX;
+        const offsetY_px = (oY * pxlScale) % stepY;
+
+        // Generator for tiles 
+        let localTiles = [];
+
+        if (shape === 'rect') {
+            const startX = Math.floor((minX - offsetX_px) / stepX) * stepX + offsetX_px;
+            const startY = Math.floor((minY - offsetY_px) / stepY) * stepY + offsetY_px;
+            for (let x = startX; x <= maxX; x += stepX) {
+                for (let y = startY; y <= maxY; y += stepY) {
+                    localTiles.push({
+                        type: 'main', poly: [
+                            { x, y }, { x: x + tileW_px, y }, { x: x + tileW_px, y: y + tileH_px }, { x, y: y + tileH_px }
+                        ]
+                    });
+                }
+            }
+        } else if (shape === 'hexa') {
+            const startRow = Math.floor((minY - offsetY_px) / stepY);
+            const endRow = Math.ceil((maxY - offsetY_px) / stepY);
+            const startCol = Math.floor((minX - offsetX_px - stepX / 2) / stepX);
+            const endCol = Math.ceil((maxX - offsetX_px) / stepX);
+
+            for (let r = startRow; r <= endRow; r++) {
+                const y = r * stepY + offsetY_px;
+                const offsetCol = (Math.abs(r) % 2 === 1) ? stepX / 2 : 0;
+                for (let c = startCol; c <= endCol; c++) {
+                    const x = c * stepX + offsetCol + offsetX_px;
+                    localTiles.push({
+                        type: 'main', poly: [
+                            { x: x + tileW_px / 2, y: y },
+                            { x: x + tileW_px, y: y + tileH_px / 4 },
+                            { x: x + tileW_px, y: y + tileH_px * 3 / 4 },
+                            { x: x + tileW_px / 2, y: y + tileH_px },
+                            { x: x, y: y + tileH_px * 3 / 4 },
+                            { x: x, y: y + tileH_px / 4 }
+                        ]
+                    });
+                }
+            }
+        } else if (shape === 'octo') {
+            const cx = tileW_px / (2 + Math.SQRT2);
+            const cy = tileH_px / (2 + Math.SQRT2);
+            const startX = Math.floor((minX - offsetX_px - stepX) / stepX) * stepX + offsetX_px;
+            const startY = Math.floor((minY - offsetY_px - stepY) / stepY) * stepY + offsetY_px;
+
+            for (let x = startX; x <= maxX + stepX; x += stepX) {
+                for (let y = startY; y <= maxY + stepY; y += stepY) {
+                    localTiles.push({
+                        type: 'main', poly: [
+                            { x: x + cx, y: y }, { x: x + tileW_px - cx, y: y },
+                            { x: x + tileW_px, y: y + cy }, { x: x + tileW_px, y: y + tileH_px - cy },
+                            { x: x + tileW_px - cx, y: y + tileH_px }, { x: x + cx, y: y + tileH_px },
+                            { x: x, y: y + tileH_px - cy }, { x: x, y: y + cy }
+                        ]
+                    });
+
+                    const cabCenterX = x + tileW_px + joint_px / 2;
+                    const cabCenterY = y + tileH_px + joint_px / 2;
+                    const dx = cx + joint_px / 2;
+                    const dy = cy + joint_px / 2;
+                    localTiles.push({
+                        type: 'cab', poly: [
+                            { x: cabCenterX, y: cabCenterY - dy }, { x: cabCenterX + dx, y: cabCenterY },
+                            { x: cabCenterX, y: cabCenterY + dy }, { x: cabCenterX - dx, y: cabCenterY }
+                        ]
+                    });
+                }
+            }
+        }
 
         let fullTilesCount = 0;
         let cutTilesCount = 0;
+        let cabochonCount = 0;
 
-        ctx.fillStyle = "rgba(52, 152, 219, 0.2)";
-        ctx.strokeStyle = "rgba(41, 128, 185, 0.8)";
         ctx.lineWidth = 1;
 
-        for (let x = startX; x < maxX; x += tileW_px + joint_px) {
-            for (let y = startY; y < maxY; y += tileH_px + joint_px) {
+        for (let tile of localTiles) {
+            // Restore coordinates to global
+            const globalPoly = tile.poly.map(p => {
+                let rot = rotatePoint(p, angleRad);
+                return { x: rot.x + anchor.x, y: rot.y + anchor.y };
+            });
 
-                const tilePoly = [
-                    { x: x, y: y },
-                    { x: x + tileW_px, y: y },
-                    { x: x + tileW_px, y: y + tileH_px },
-                    { x: x, y: y + tileH_px }
-                ];
+            const status = testTileIntersection(globalPoly, points);
 
-                const status = testTileIntersection(tilePoly, points);
+            if (status) {
+                ctx.beginPath();
+                ctx.moveTo(globalPoly[0].x, globalPoly[0].y);
+                for (let i = 1; i < globalPoly.length; i++) ctx.lineTo(globalPoly[i].x, globalPoly[i].y);
+                ctx.closePath();
 
-                if (status) {
-                    // Draw tile
-                    ctx.fillRect(x, y, tileW_px, tileH_px);
-                    ctx.strokeRect(x, y, tileW_px, tileH_px);
-
+                if (tile.type === 'main') {
                     if (status === 'FULL') {
                         fullTilesCount++;
-                    } else if (status === 'CUT') {
+                        ctx.fillStyle = "rgba(52, 152, 219, 0.2)";
+                    } else {
                         cutTilesCount++;
-                        // highlight cut tiles visually
                         ctx.fillStyle = "rgba(231, 76, 60, 0.3)";
-                        ctx.fillRect(x, y, tileW_px, tileH_px);
-                        ctx.fillStyle = "rgba(52, 152, 219, 0.2)"; // reset
                     }
+                    ctx.strokeStyle = "rgba(41, 128, 185, 0.8)";
+                } else if (tile.type === 'cab') {
+                    cabochonCount++;
+                    ctx.fillStyle = (status === 'FULL') ? "rgba(46, 204, 113, 0.6)" : "rgba(230, 126, 34, 0.6)";
+                    ctx.strokeStyle = "rgba(39, 174, 96, 0.9)";
                 }
+
+                ctx.fill();
+                ctx.stroke();
             }
         }
 
@@ -497,15 +595,18 @@ function draw() {
 
         // Compute Stats
         const areaPx = polygonArea(points);
-        // Area in pixels to cm²: (AreaPx / pxlScale) / pxlScale
-        // Then to m²: / 10000
         const areaM2 = areaPx / (pxlScale * pxlScale) / 10000;
 
         statArea.innerText = areaM2.toFixed(2) + " m²";
         statAreaMarge.innerText = (areaM2 * 1.1).toFixed(2) + " m²";
         statFullTiles.innerText = fullTilesCount;
         statCutTiles.innerText = cutTilesCount;
-        statTotalTiles.innerText = (fullTilesCount + cutTilesCount);
+
+        let totalText = (fullTilesCount + cutTilesCount).toString() + (shape !== 'rect' ? " (" + shape + ")" : "");
+        if (cabochonCount > 0) {
+            totalText += " + " + cabochonCount + " cabochons";
+        }
+        statTotalTiles.innerText = totalText;
     } else {
         statArea.innerText = "0.00 m²";
         statAreaMarge.innerText = "0.00 m²";
